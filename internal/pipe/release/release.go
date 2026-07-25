@@ -1,0 +1,201 @@
+package release
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+
+	"github.com/caarlos0/log"
+	"goforge.dev/gpreleaser/internal/artifact"
+	"goforge.dev/gpreleaser/internal/client"
+	"goforge.dev/gpreleaser/internal/extrafiles"
+	"goforge.dev/gpreleaser/internal/git"
+	"goforge.dev/gpreleaser/internal/pipe"
+	"goforge.dev/gpreleaser/internal/semerrgroup"
+	"goforge.dev/gpreleaser/internal/tmpl"
+	"goforge.dev/gpreleaser/pkg/config"
+	"goforge.dev/gpreleaser/pkg/context"
+)
+
+// ErrMultipleReleases indicates that multiple releases are defined. ATM only one of them is allowed.
+// See https://github.com/goreleaser/goreleaser/pull/809
+var ErrMultipleReleases = errors.New("multiple releases are defined. Only one is allowed")
+
+// Pipe for github release.
+type Pipe struct{}
+
+func (Pipe) String() string { return "scm releases" }
+
+func (Pipe) Skip(ctx *context.Context) (bool, error) {
+	return tmpl.New(ctx).Bool(ctx.Config.Release.Disable)
+}
+
+// Default sets the pipe defaults.
+func (p Pipe) Default(ctx *context.Context) error {
+	if b, _ := p.Skip(ctx); b {
+		return pipe.Skip("release is disabled")
+	}
+	numOfReleases := 0
+	if ctx.Config.Release.GitHub.String() != "" {
+		numOfReleases++
+	}
+	if ctx.Config.Release.GitLab.String() != "" {
+		numOfReleases++
+	}
+	if ctx.Config.Release.Gitea.String() != "" {
+		numOfReleases++
+	}
+	if numOfReleases > 1 {
+		return ErrMultipleReleases
+	}
+
+	if ctx.Config.Release.NameTemplate == "" {
+		ctx.Config.Release.NameTemplate = "{{.Tag}}"
+	}
+
+	switch ctx.TokenType {
+	case context.TokenTypeGitLab:
+		if err := setupGitLab(ctx); err != nil {
+			return err
+		}
+	case context.TokenTypeGitea:
+		if err := setupGitea(ctx); err != nil {
+			return err
+		}
+	default:
+		// We keep github as default for now
+		if err := setupGitHub(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Check if we have to check the git tag for an indicator to mark as pre release
+	switch ctx.Config.Release.Prerelease {
+	case "auto":
+		if ctx.Semver.Prerelease != "" {
+			ctx.PreRelease = true
+		}
+		log.Debugf("pre-release was detected for tag %s: %v", ctx.Git.CurrentTag, ctx.PreRelease)
+	case "true":
+		ctx.PreRelease = true
+	}
+	log.Debugf("pre-release for tag %s set to %v", ctx.Git.CurrentTag, ctx.PreRelease)
+
+	return nil
+}
+
+func getRepository(ctx *context.Context) (config.Repo, error) {
+	repo, err := git.ExtractRepoFromConfig(ctx)
+	if err != nil {
+		return config.Repo{}, err
+	}
+	if err := repo.CheckSCM(); err != nil {
+		return config.Repo{}, err
+	}
+	return repo, nil
+}
+
+// Publish the release.
+func (Pipe) Publish(ctx *context.Context) error {
+	c, err := releaseClient(ctx)
+	if err != nil {
+		return err
+	}
+	if err := doPublish(ctx, c); err != nil {
+		return err
+	}
+	if !ctx.Config.Release.Draft {
+		log.WithField("url", ctx.ReleaseURL).
+			Info("release published")
+	}
+	return nil
+}
+
+// releaseClient creates the SCM client for the release, honoring a custom token
+// set on the release repository, if any.
+func releaseClient(ctx *context.Context) (client.Client, error) {
+	repo := releaseRepo(ctx)
+	return client.NewIfToken(ctx, nil, repo.Token)
+}
+
+func releaseRepo(ctx *context.Context) config.Repo {
+	switch ctx.TokenType {
+	case context.TokenTypeGitLab:
+		return ctx.Config.Release.GitLab
+	case context.TokenTypeGitea:
+		return ctx.Config.Release.Gitea
+	default:
+		return ctx.Config.Release.GitHub
+	}
+}
+
+func doPublish(ctx *context.Context, client client.Client) error {
+	log.WithField("tag", ctx.Git.CurrentTag).
+		WithField("repo", releaseRepo(ctx).String()).
+		Info("releasing")
+	if err := ctx.Artifacts.Refresh(); err != nil {
+		return err
+	}
+	body, err := describeBody(ctx)
+	if err != nil {
+		return err
+	}
+	releaseID, err := client.CreateRelease(ctx, body.String())
+	if err != nil {
+		return err
+	}
+
+	skipUpload, err := tmpl.New(ctx).Bool(ctx.Config.Release.SkipUpload)
+	if err != nil {
+		return err
+	}
+	if skipUpload {
+		if err := client.PublishRelease(ctx, releaseID); err != nil {
+			return err
+		}
+		return pipe.Skip("release.skip_upload is set")
+	}
+
+	extraFiles, err := extrafiles.Find(ctx, ctx.Config.Release.ExtraFiles)
+	if err != nil {
+		return err
+	}
+
+	for name, path := range extraFiles {
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("failed to upload %s: %w", name, err)
+		}
+		ctx.Artifacts.Add(&artifact.Artifact{
+			Name: name,
+			Path: path,
+			Type: artifact.UploadableFile,
+		})
+	}
+
+	types := artifact.ReleaseUploadableTypes()
+	if ctx.Config.Release.IncludeMeta {
+		types = append(types, artifact.Metadata)
+	}
+	filters := artifact.And(
+		artifact.ByTypes(types...),
+		artifact.ByIDs(ctx.Config.Release.IDs...),
+	)
+
+	g := semerrgroup.New(ctx.Parallelism)
+	for _, artifact := range ctx.Artifacts.Filter(filters).List() {
+		g.Go(func() error {
+			log.WithField("name", artifact.Name).
+				Info("uploading to release")
+			if err := client.Upload(ctx, releaseID, artifact); err != nil {
+				return fmt.Errorf("failed to upload %s: %w", artifact.Name, err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	return client.PublishRelease(ctx, releaseID)
+}
