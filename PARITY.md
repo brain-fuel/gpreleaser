@@ -18,7 +18,9 @@ Two fixture fixes for the rename: import-surgery reverted inside `testdata/`,
 and the `release` SCM `no repo` tests expect the auto-detected repo name (now
 `gpreleaser`) instead of the hardcoded `goreleaser`.
 
-**Phase 2 — Go+ authorship (next).** Convert the hand-authored source to Go+
+**Phase 2 — Go+ authorship: DONE.** 204 hand-authored .go sources converted to Go+ (internal/pipe all ~60 stages, internal/builders, internal/pipeline, internal/*, pkg, cmd). 11 .go kept (9 //go:embed, 1 generated licenses.go, cmd/goreleaser/main.go embed). ZERO enums — artifact.Type is JSON-serialized (dist/artifacts.json), context.Action's zero value is load-bearing, config format/type/mode/provider strings are YAML-coupled. Zero goplus codegen errors under released v0.139.0. gen-check clean, deterministic; build/vet green; 120 packages pass (only internal/pipe/docker fails — needs a docker daemon, identical on upstream); `check` byte-identical across 3 configs; binary `goreleaser`.
+
+**Phase 2 (old).** Convert the hand-authored source to Go+
 (`.gp`): internal/{pipe, builders, pipeline}, pkg, cmd. Enum idiomata only for
 genuine scalar sums with wire-format preservation.
 

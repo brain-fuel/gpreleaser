@@ -1,4 +1,4 @@
 /goreleaser
 /gpreleaser
 *.test
-dist/
+/dist/

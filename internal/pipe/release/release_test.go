@@ -720,7 +720,7 @@ func TestSkip(t *testing.T) {
 
 		ctx.Artifacts.Add(&artifact.Artifact{
 			Name: "a",
-			Path: "./doc.go",
+			Path: "./doc_gp.go",
 			Type: artifact.UploadableFile,
 		})
 		client := &client.Mock{}
@@ -739,7 +739,7 @@ func TestSkip(t *testing.T) {
 
 		ctx.Artifacts.Add(&artifact.Artifact{
 			Name: "a",
-			Path: "./doc.go",
+			Path: "./doc_gp.go",
 			Type: artifact.UploadableFile,
 		})
 		client := &client.Mock{}
@@ -753,7 +753,7 @@ func TestSkip(t *testing.T) {
 		ctx := testctx.Wrap(t.Context())
 		ctx.Artifacts.Add(&artifact.Artifact{
 			Name: "a",
-			Path: "./doc.go",
+			Path: "./doc_gp.go",
 			Type: artifact.UploadableFile,
 		})
 

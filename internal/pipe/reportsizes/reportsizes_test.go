@@ -43,7 +43,7 @@ func TestRun(t *testing.T) {
 			require.NoError(t, err)
 			ctx.Artifacts.Add(&artifact.Artifact{
 				Name:  "foo",
-				Path:  filepath.Join(cw, "reportsizes.go"),
+				Path:  filepath.Join(cw, "reportsizes_gp.go"),
 				Extra: map[string]any{},
 				Type:  tp,
 			})
@@ -51,7 +51,7 @@ func TestRun(t *testing.T) {
 		}
 		ctx.Artifacts.Add(&artifact.Artifact{
 			Name:  "foo",
-			Path:  "reportsizes.go",
+			Path:  "reportsizes_gp.go",
 			Extra: map[string]any{},
 			Type:  tp,
 		})
