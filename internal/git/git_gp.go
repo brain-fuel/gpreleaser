@@ -5,13 +5,12 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"os/exec"
 	"strings"
 
 	"github.com/caarlos0/log"
+	process "goforge.dev/goplus/std/process"
 )
 
 // IsRepo returns true if current folder is a git repository.
@@ -25,28 +24,25 @@ func RunWithEnv(ctx context.Context, env []string, args ...string) (string, erro
 		"-c", "log.showSignature=false",
 	}
 	args = append(extraArgs, args...)
-	/* #nosec */
-	cmd := exec.CommandContext(ctx, "git", args...)
-
-	stdout := bytes.Buffer{}
-	stderr := bytes.Buffer{}
-
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Env = append(cmd.Env, env...)
-
-	err := cmd.Run()
+	// git execution runs through std/process. When a caller supplies an
+	// environment, git historically runs with exactly that (no inheritance),
+	// which maps to a clean-env process capability.
+	spec := process.Spec{Path: "git", Args: args}
+	if len(env) > 0 {
+		spec.Env, spec.Clean = env, true
+	}
+	out, err := process.Run(ctx, spec)
 
 	log.WithField("args", args).
-		WithField("stdout", strings.TrimSpace(stdout.String())).
-		WithField("stderr", strings.TrimSpace(stderr.String())).
+		WithField("stdout", strings.TrimSpace(string(out.Stdout))).
+		WithField("stderr", strings.TrimSpace(string(out.Stderr))).
 		Debug("git command result")
 
 	if err != nil {
-		return "", errors.New(stderr.String())
+		return "", errors.New(string(out.Stderr))
 	}
 
-	return stdout.String(), nil
+	return string(out.Stdout), nil
 }
 
 // Run runs a git command and returns its output or errors.
